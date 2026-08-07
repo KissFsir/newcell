@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Django
+db.sqlite3
+media/
+staticfiles/
+static/dist/
+
+# ML models / weights (large, downloaded)
+models/cache/
+models/face_db.pkl
+models/*.jpg
+*.onnx
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# IDE / OS
+.idea/
+.DS_Store
+*.swp

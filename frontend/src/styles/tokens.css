@@ -1,0 +1,22 @@
+:root {
+  /* 深色科技感，青蓝点缀 —— 无紫色渐变、无 emoji */
+  --bg-0: #070b12;
+  --bg-1: #0b1119;
+  --panel: rgba(13, 20, 30, 0.72);
+  --panel-border: rgba(64, 200, 190, 0.18);
+  --accent: #22d3c6;
+  --accent-2: #14b8a6;
+  --warn: #f5b455;
+  --danger: #f25f5c;
+  --ok: #3ddc97;
+  --text: #d7e2ea;
+  --text-dim: #6b7c8c;
+  --grid-line: rgba(64, 200, 190, 0.06);
+
+  --sans: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mono: 'SF Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+
+  --radius: 10px;
+  --gap: 12px;
+}
