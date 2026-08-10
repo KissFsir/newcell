@@ -1,28 +1,11 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
-import { useSnapshotStream } from '../composables/useSnapshotStream'
+import { computed } from 'vue'
+import { useCaptureSession } from '../composables/useCaptureSession'
 
-const { snapshot } = useSnapshotStream()
-const offline = ref(false)
+const { running, modelState, setVideoEl } = useCaptureSession()
 
-const status = computed(() => snapshot.value?.status || null)
-const live = computed(() => !!status.value?.worker_running && !!status.value?.camera_ok)
-const loading = computed(() => !!status.value?.worker_running && !status.value?.camera_ok)
-
-// worker 重新就绪时自动重连 MJPEG
-watch(live, (on) => {
-  if (on) offline.value = false
-})
-
-function onError() {
-  offline.value = true
-}
-
-const stubText = computed(() => {
-  if (loading.value) return '采集中…'
-  if (offline.value) return '预览中断'
-  return 'CAMERA OFF'
-})
+const live = computed(() => running.value)
+const loading = computed(() => running.value && modelState.value !== 'ready')
 </script>
 
 <template>
@@ -32,14 +15,16 @@ const stubText = computed(() => {
       <span class="hint">LIVE</span>
     </div>
     <div class="panel-body video-body">
-      <img
-        v-if="live && !offline"
-        :src="'/api/video/stream'"
-        alt="camera"
+      <video
+        v-if="live"
+        :ref="setVideoEl"
+        autoplay
+        muted
+        playsinline
         class="video-frame"
-        @error="onError"
-      />
-      <div v-else class="stub">{{ stubText }}</div>
+      ></video>
+      <div v-else class="stub">CAMERA OFF</div>
+      <div v-if="loading" class="video-overlay mono">模型加载中…</div>
     </div>
   </div>
 </template>
@@ -50,6 +35,7 @@ const stubText = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
 
 .video-frame {
@@ -58,5 +44,19 @@ const stubText = computed(() => {
   object-fit: contain;
   border-radius: 6px;
   background: #000;
+}
+
+.video-overlay {
+  position: absolute;
+  inset: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  letter-spacing: 0.15em;
+  color: var(--accent);
+  background: rgba(7, 11, 18, 0.55);
+  border-radius: 6px;
+  pointer-events: none;
 }
 </style>

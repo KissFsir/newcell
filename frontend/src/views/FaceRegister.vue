@@ -3,6 +3,9 @@ import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '../api/client'
 
 const name = ref('')
+const gender = ref('')
+const studentNo = ref('')
+const major = ref('')
 const file = ref(null)
 const busy = ref(false)
 const msg = ref('')
@@ -115,11 +118,17 @@ async function submit() {
   try {
     const fd = new FormData()
     fd.append('name', name.value.trim())
+    fd.append('gender', gender.value)
+    fd.append('student_no', studentNo.value.trim())
+    fd.append('major', major.value.trim())
     fd.append('file', blob, 'capture.jpg')
     await api.upload('/api/faces/register', fd)
     msg.value = '注册成功'
     msgType.value = 'ok'
     name.value = ''
+    gender.value = ''
+    studentNo.value = ''
+    major.value = ''
     capturedImg.value = ''
     file.value = null
     if (fileInputRef.value) fileInputRef.value.value = ''
@@ -158,6 +167,25 @@ onMounted(loadFaces)
         <label class="field">
           <span class="field-label">姓名</span>
           <input v-model="name" class="input mono" placeholder="例如：张三" maxlength="128" />
+        </label>
+
+        <div class="field">
+          <span class="field-label">性别</span>
+          <select v-model="gender" class="input mono">
+            <option value="">（选填）</option>
+            <option value="男">男</option>
+            <option value="女">女</option>
+          </select>
+        </div>
+
+        <label class="field">
+          <span class="field-label">学号</span>
+          <input v-model="studentNo" class="input mono" placeholder="例如：20240001" maxlength="64" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">专业</span>
+          <input v-model="major" class="input mono" placeholder="例如：计算机科学" maxlength="128" />
         </label>
 
         <div class="field">
@@ -229,6 +257,10 @@ onMounted(loadFaces)
             <span v-else class="face-thumb placeholder"></span>
             <div class="face-meta">
               <span class="face-name">{{ f.person_name }}</span>
+              <span
+                v-if="f.gender || f.student_no || f.major"
+                class="face-info mono"
+              >{{ [f.gender, f.student_no, f.major].filter(Boolean).join(' · ') }}</span>
               <span class="face-time mono">{{ f.created_at }}</span>
             </div>
             <button class="btn ghost" @click="removeFace(f.id)">删除</button>
@@ -422,6 +454,11 @@ onMounted(loadFaces)
 }
 
 .face-time {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.face-info {
   font-size: 11px;
   color: var(--text-dim);
 }

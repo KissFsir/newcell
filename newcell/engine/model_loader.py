@@ -2,8 +2,8 @@
 
 线程策略：模型实例不跨线程并发前向调用。
 - 进程内首次加载用 `model_lock` 保护；
-- Django 请求路径（人脸注册）的推理调用须显式持有 `model_lock`；
-- 推理进程（camera_worker）单线程串行，无需加锁。
+- Django 请求路径（人脸注册 / 浏览器推理接口）的推理调用须显式持有 `model_lock`；
+- 后台预热线程只负责加载，前向调用仍由请求路径持锁串行。
 """
 import threading
 
@@ -16,6 +16,8 @@ model_lock = threading.RLock()
 _mtcnn = None
 _expression_pipe = None
 _face_app = None
+_vad = None
+_whisper = None
 
 
 def get_mtcnn():
@@ -54,6 +56,36 @@ def get_expression_pipe():
                         model="dima806/facial_emotions_image_detection",
                     )
     return _expression_pipe
+
+
+def get_vad():
+    """Silero VAD。返回 (model, utils)，utils[0] = get_speech_timestamps。"""
+    global _vad
+    if _vad is None:
+        with model_lock:
+            if _vad is None:
+                import torch
+                model, utils = torch.hub.load(
+                    repo_or_dir="snakers4/silero-vad",
+                    model="silero_vad",
+                    force_reload=False,
+                )
+                _vad = (model, utils)
+    return _vad
+
+
+def get_whisper():
+    """Whisper tiny（中文 ASR），缓存在 MODELS_CACHE。"""
+    global _whisper
+    if _whisper is None:
+        with model_lock:
+            if _whisper is None:
+                from django.conf import settings
+                import whisper
+                _whisper = whisper.load_model(
+                    "tiny", download_root=str(settings.MODELS_CACHE)
+                )
+    return _whisper
 
 
 def get_insightface():

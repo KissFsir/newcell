@@ -13,7 +13,7 @@ import StatusBar from './components/StatusBar.vue'
       <nav class="nav">
         <RouterLink to="/" class="nav-link">监控面板</RouterLink>
         <RouterLink to="/faces" class="nav-link">人脸注册</RouterLink>
-        <RouterLink to="/history" class="nav-link">历史回放</RouterLink>
+        <RouterLink to="/settings" class="nav-link">设置</RouterLink>
       </nav>
     </header>
 

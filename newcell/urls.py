@@ -25,6 +25,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('newcell.apps.expression.urls')),
     path('api/', include('newcell.apps.records.urls')),
+    path('api/', include('newcell.apps.physio.urls')),
     # SPA 兜底：非 api/media/static/admin 的路径都返回前端入口（支持 vue-router history 刷新）
     re_path(r'^(?!admin/|api/|media/|static/).*$', index_view, name='index'),
 ]

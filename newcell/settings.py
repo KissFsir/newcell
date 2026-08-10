@@ -143,10 +143,6 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 # 业务常量
 MODELS_CACHE = BASE_DIR / 'models' / 'cache'
-FACE_FRAME_DIR = MEDIA_ROOT / 'frames'
-HEARTBEAT_PATH = MEDIA_ROOT / 'state' / 'heartbeat.json'
-CAMERA_INTERVAL = 5.0
-SSE_INTERVAL = 3.0
 FACE_SIM_THRESHOLD = float(os.environ.get('NEWCELL_FACE_THRESHOLD', '0.35'))
 
 # Default primary key field type

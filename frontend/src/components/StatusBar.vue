@@ -1,24 +1,18 @@
 <script setup>
 import { computed } from 'vue'
 import { useNow } from '@vueuse/core'
-import { useSnapshotStream } from '../composables/useSnapshotStream'
+import { useCaptureSession } from '../composables/useCaptureSession'
 
-const { snapshot } = useSnapshotStream()
+const { running, modelState } = useCaptureSession()
 const now = useNow({ interval: 1000 })
 
-const status = computed(() => snapshot.value?.status || null)
-
-const workerState = computed(() => {
-  if (!status.value) return 'off'
-  return status.value.worker_running ? 'ok' : 'warn'
+const modelStatus = computed(() => {
+  if (modelState.value === 'ready') return 'ok'
+  if (modelState.value === 'loading') return 'warn'
+  if (modelState.value === 'error') return 'danger'
+  return 'off'
 })
-
-const cameraState = computed(() => {
-  if (!status.value || !status.value.worker_running) return 'off'
-  return status.value.camera_ok ? 'ok' : 'warn'
-})
-
-const sseState = computed(() => (snapshot.value ? 'ok' : 'off'))
+const cameraStatus = computed(() => (running.value ? 'ok' : 'off'))
 
 const timeStr = computed(() =>
   now.value.toLocaleTimeString('zh-CN', { hour12: false })
@@ -28,16 +22,10 @@ const timeStr = computed(() =>
 <template>
   <footer class="statusbar mono">
     <span class="status-item">
-      <span class="dot" :class="'dot-' + sseState"></span>LINK {{ sseState }}
+      <span class="dot" :class="'dot-' + cameraStatus"></span>CAMERA {{ cameraStatus }}
     </span>
     <span class="status-item">
-      <span class="dot" :class="'dot-' + workerState"></span>WORKER {{ workerState }}
-    </span>
-    <span class="status-item">
-      <span class="dot" :class="'dot-' + cameraState"></span>CAMERA {{ cameraState }}
-    </span>
-    <span class="status-item">
-      UPDATE {{ status?.last_update_seconds ?? '--' }}s
+      <span class="dot" :class="'dot-' + modelStatus"></span>MODEL {{ modelState }}
     </span>
     <span class="status-spacer"></span>
     <span>{{ timeStr }}</span>

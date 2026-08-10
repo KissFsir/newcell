@@ -1,6 +1,6 @@
 # 任务清单（实时更新，`[x]` 表示完成）
 
-> 环境：conda `newcell` ｜ 前端：Vue3+Vite ｜ 实时：SSE 3s ｜ 设备：cuda>mps>cpu
+> 环境：conda `newcell` ｜ 前端：Vue3+Vite ｜ 采集：浏览器 `getUserMedia` + HTTP 推理 ｜ 设备：当前环境 MPS 不可用 → CPU
 
 ## Phase 0 — 仓库卫生 + 基础设施
 - [x] 创建 `.gitignore`（media/、db.sqlite3、models/cache、face_db.pkl、node_modules、dist、static/dist、__pycache__、.idea）
@@ -54,18 +54,29 @@
 - [x] 勾选全部清单 + 回填 `KEYPOINTS.md`
 - [x] **headless Chrome CDP 验证**：`websocket-client`（suppress_origin=True 规避 Chrome 151 Origin 拒绝）+ `--remote-debugging-port`；`useEventSource` 传 `undefined` 而非 `null`（`events is not iterable` 已修复）
 
-## 当前问题与需求（2026-08-07 用户反馈，已记录未实现）
-- [ ] **问题① 启动延迟**：点「开始采集」后要**等很久**才调用摄像头/出画面——worker 先加载模型再开摄像头（首载 ~1min）。方向：开摄像头与模型加载并行（先出画面再加载）；或前端展示加载阶段/进度。
-- [ ] **问题② SSE 导致显示不流畅**：SSE 推送疑似让前端画面/数据更新不流畅。待排查：3s 整段突跳 vs MJPEG 同页资源竞争 vs EventSource 重连中断。
-- [ ] **需求③ 采集源改为浏览器摄像头**：数据采集应由**浏览器 `getUserMedia`** 完成（而非 worker 的 OpenCV）。方向：浏览器连续取帧 → 上传后端推理 → 返回表情/身份结果；worker 角色需重新设计（可能改为纯推理服务），涉及前端帧上传通道 + 后端推理接口 + 结果回传。
-- [ ] **需求④ 表情只显示当前主情绪**：前端不再展示 7 类概率（去掉概率横条），只显示当下的情绪是什么。
-- [ ] **需求⑤ 左侧布局改版**：左侧新增「声纹」框 + 「语音实时转录（中文）」框；实时转录接 ASR（whisper），声纹语义（说话人识别/声纹特征？）待确认。
+## Phase 6 — 浏览器采集重构（2026-08-07 完成，解决 ①②③④⑤）
+- [x] **采集源改浏览器 getUserMedia**（需求③）：`useCaptureSession` 共享 composable 同时取视频+音频 → 本地 `<video>` 预览（零延迟）；帧/音频节流上行推理接口，结果驱动面板。**彻底移除** worker 进程 / MJPEG / SSE：`camera_worker.py`、`run_worker.py`、`stream_store.py`、`camera/start|stop|status`、`/api/stream`、`/api/video/stream` 全部删除，`RemovedEndpointTests` 断言 404。
+- [x] **后端纯推理接口**：`/api/infer/frame`（JPEG multipart → 表情+身份）、`/api/infer/audio`（WAV multipart → VAD+whisper 转录）、`/api/infer/status`（触发后台 warmup，返回 loading/ready）。模型进程内懒加载，`inference.py::start_warmup()` 后台线程预热，**首载不阻塞首个请求**（解决问题①启动延迟）。
+- [x] **表情只显示主情绪**（需求④）：`ExpressionPanel` 大号主情绪（中英+颜色）+ 置信度，去掉 7 类概率横条。
+- [x] **左侧声纹 + 中文实时转录**（需求⑤）：`VoiceActivityPanel`（AnalyserNode 波形 canvas + SPEAKING/SILENCE）+ `TranscriptPanel`（whisper 中文转录列表）。whisper tiny 5s 段 CPU 实测 0.5–0.8s。
+- [x] **前端状态驱动**：`StatusBar` 显示 CAMERA on/off + MODEL idle/loading/ready；VideoStream 本地预览 + 「模型加载中…」遮罩。
+- [x] **验证**：8 个 Django 测试全过（mock 模型注入）；真实人脸图片经 `/api/infer/frame` 识别出 emotion=fear/neutral + 曾逸韩(0.65/0.75)；headless Chrome CDP 假摄像头 E2E **PASS**（面板渲染→点开始采集→视频流上线→MODEL ready→停止复位→无 console error）；`ExpressionRecord`/`IdentityRecord` 落库确认。
+- [x] **文档回填**：`KEYPOINTS.md` §6 实时与数据流重写为新架构。
+
+## Phase 7 — 生理数据采集（2026-08-08 完成采集链路）
+- [x] Arduino 两块板优化烧录代码 → `scripts/arduino/thermo_pulse.ino`、`scripts/arduino/gsr.ino`（20Hz 采样 + 低通滤波 + 稳定时序，交付板子端）
+- [x] `SerialConfig` 单例 + `PhysioSample` 原始样本 + `PhysioRecord` 加 `gsr_avg`；迁移完成
+- [x] `engine/physio.py`：进程内后台线程双端口读取（pyserial）、行解析、落库、5s 聚合、断线重试、保留清理
+- [x] 接口：`/api/settings/serial` GET/PUT、`/api/serial/ports`、`/api/physio/latest`、`/api/physio/history`
+- [x] 设置页「生理数据采集」节（开关/端口A/B/波特率/端口 datalist）；PhysioChart 实时展示（温度/湿度/皮电 + 脉搏波形 + 连接状态）
+- [x] 测试脚本：`scripts/physio_sim.py`（pty 虚拟串口模拟器）、`scripts/serial_measure.py`（真实串口性能测量）
+- [x] 验证：22 个测试全过；本机 sim → 虚拟端口 → 读取落库实测（双端口 ~19Hz、样本+聚合正确）；CDP E2E PASS
 
 ## 未来工作（保持未勾选）
 - [ ] 麦克风 worker：VAD + SER + ASR + 文本情感（speech app 落地）
-- [ ] Arduino 生理信号（双串口）：端口 A=心率+温湿度、端口 B=皮电；`PhysioRecord` 落库
-- [ ] 生理前端：体温直接大数字展示；心率波形图（按各人基线相对化，波形一致但数值因人而异）；湿度折线图
-- [ ] 生理数据**每次新增都落库**（曲线基于 DB 历史，刷新/回放不丢数据）
+- [ ] 心率 BPM 峰值检测（当前存脉搏波形，非 BPM）；按人基线归一化波形
+- [ ] 皮电 → SCL/SCR 紧张度指标（EDA 分析）
+- [ ] 生理数据超长期保留 / SQLite 上规模后迁 PostgreSQL
 - [ ] 皮电 → GSR：SCL 低通基线 + SCR 峰值检测，输出紧张/唤醒指标（先基础版，后续改进）
 - [ ] ECharts 历史时间线 + CSV 导出 + 每日摘要
 - [ ] 登录/注册 + 令牌认证 + CSRF 硬化（accounts app 落地）

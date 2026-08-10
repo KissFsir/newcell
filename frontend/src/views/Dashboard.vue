@@ -1,17 +1,19 @@
 <script setup>
-import EmotionBadge from '../components/EmotionBadge.vue'
-import ExpressionPanel from '../components/ExpressionPanel.vue'
 import VideoStream from '../components/VideoStream.vue'
 import IdentityPanel from '../components/IdentityPanel.vue'
+import VoiceActivityPanel from '../components/VoiceActivityPanel.vue'
 import PhysioChart from '../components/PhysioChart.vue'
+import TranscriptPanel from '../components/TranscriptPanel.vue'
+import ResultPanel from '../components/ResultPanel.vue'
 </script>
 
 <template>
   <div class="dashboard">
-    <EmotionBadge />
-    <ExpressionPanel />
     <VideoStream />
     <IdentityPanel />
+    <VoiceActivityPanel />
     <PhysioChart />
+    <TranscriptPanel />
+    <ResultPanel />
   </div>
 </template>

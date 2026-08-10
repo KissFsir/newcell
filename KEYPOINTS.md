@@ -19,11 +19,11 @@
 - Windows 无 NVIDIA 时自动回退 CPU（所有推理都应能在 CPU 跑，只是慢）。
 
 ## 3. 线程与并发（本地模型）
-- 结论：**进程隔离 + 单线程推理 + 加锁**，不跨线程共享模型。
-- `camera_worker` 独立进程、串行循环推理 → 无并发。
-- Django 请求路径（人脸注册）的模型调用加 `threading.RLock`；MPS 下并发 op 可能死锁。**注意必须用 RLock**：请求路径先 `with model_lock` 再调 `get_insightface()`，其内部会二次取锁——非可重入 `Lock` 会自锁死（实测 face_register 挂起几分钟）。RLock 同线程可重入、跨线程仍互斥，安全。
-- 懒加载：`runserver` 启动不加载模型，只在 worker 启动（~1min）与人脸注册首次（懒）。
-- 多进程唯一共享 SQLite → WAL + busy_timeout + 单写入者；后续 mic/arduino 沿用"每进程单写入者"，规模大了再考虑 PostgreSQL。
+- 结论：**进程内懒加载 + 单例模型 + 加锁**，不跨请求共享模型实例并发推理。
+- 采集重构后无独立 worker 进程：`inference.py::start_warmup()` 后台线程串行加载全部模型，置 `_models_ready`；`infer_frame`/`infer_audio` 就绪后直接在请求线程推理（CPU 上 <1s）。
+- 模型调用加 `threading.RLock`（`model_loader` 每模型一把）；MPS 下并发 op 可能死锁。**注意必须用 RLock**：请求路径先 `with model_lock` 再调 `get_insightface()`，其内部会二次取锁——非可重入 `Lock` 会自锁死（实测 face_register 挂起几分钟）。RLock 同线程可重入、跨线程仍互斥，安全。
+- 懒加载：`runserver` 启动不加载模型，首个 `/api/infer/status` 触发后台 warmup（~1min，期间前端显示加载中）；人脸注册首次（懒）。
+- SQLite WAL + busy_timeout；写用短事务 `transaction.atomic()`（warmup 只读缓存、写仅 inference 落库，同一进程内单写入者）。
 
 ## 4. 模型映射（已下载于 `models/cache`）
 | 模型 | 用途 | 标签/输出 | 备注 |
@@ -41,26 +41,21 @@
 - Windows DPI 125/150%：前端不用固定 px，全部 `minmax(0,1fr)` + `dvh`。
 - MJPEG `<img>` 与 SSE `EventSource` 在 Chrome/Edge/Firefox/Safari 均兼容；开发走 Vite 代理同源，生产 Django 同源。
 
-## 6. 实时与数据流
-- **待办方向（2026-08-07 用户确认）**：数据采集计划从 worker 的 OpenCV 摄像头**改为浏览器 `getUserMedia`**——前端连续取帧上传后端推理、回传表情/身份结果；当前 worker 开摄像头 + 写 latest.jpg + MJPEG 的架构届时会被重构成「纯推理服务」。涉及前端帧上传通道、后端推理接口、结果回传；同时去掉前端 7 类概率展示（只显示当前主情绪），左侧新增声纹 + 中文实时语音转录框。本节的 worker/SSE/MJPEG 描述在改造落地前仍为当前事实。
-- worker 推理 5s（准实时约束），SSE 每 3s 重读最新记录推送 → 新推理落库后展示延迟 ≤3s。两者节奏不同是有意取舍。
-- 前端 `useEventSource('/api/stream')` 第二参 events **必须传 `undefined` 而非 `null`**（`null` 不可迭代 → 抛 `events is not iterable`，组件 setup 全挂）。默认已含 message，勿传数组。
-- 状态来源：`media/state/heartbeat.json` 心跳，超过 ~20s 无更新视为 worker 停止（前端状态灯转黄）。
-- 摄像头预览：MJPEG 由 worker 原子写 `media/frames/latest.jpg`（跨进程文件共享，非内存），Django 读 mtime 分块输出。
-- MJPEG/SSE 响应必须带 `Cache-Control: no-store/no-cache`，否则浏览器缓存首块后冻结。
+## 6. 实时与数据流（2026-08-07 重构后）
+- **采集 = 浏览器 `getUserMedia`，推理 = HTTP 请求/响应**（旧 worker/SSE/MJPEG 已全部删除）。`useCaptureSession`（`createSharedComposable`）一次取视频+音频：视频给本地 `<video>` 预览（零延迟），节流 `FRAME_MS=3000` canvas→JPEG POST `/api/infer/frame`、`AUDIO_MS=5000` PCM→WAV POST `/api/infer/audio`；结果同步进各面板 ref。无 SSE、无 worker 进程、无 WebSocket。
+- **模型进程内懒加载 + 后台预热**：`inference.py::start_warmup()` 线程加载全部模型，`GET /api/infer/status` 触发并返回 `{state: loading|ready}`；前端轮询就绪后启动帧/音频循环。**首载不阻塞首个请求**（画面即时，模型后台加载）。
+- **whisper 转录**：5s 一段音频，Silero VAD 判定有语音才跑 whisper tiny（`language="zh"`），CPU 稳态 0.5–0.8s；`TranscriptRecord` 落库。
+- **帧推理写库**：每次 infer_frame 写 `ExpressionRecord` + `IdentityRecord`（幂等，history 页面基于 DB 读取）。
+- 色彩空间纪律：infer_frame 的 JPEG 解码为 **BGR** numpy 后，MTCNN 要 RGB、表情 pipeline 要 RGB PIL、insightface 要 BGR，逐调用点转换。
+- **兼容层**：`/api/expression/latest`、`/api/expression/history`、`/api/identity/current`、`/api/faces` CRUD 保留，前端 History/FaceRegister 仍可用。
 
-## 7. Arduino 生理信号数据（未来阶段，需求已确认）
-- **两个串口/端口传回**：端口 A = 心率 + 体表温度 + 皮肤湿度；端口 B = 皮电（皮肤电导，原始值）。
-- **体温**：前端直接大数字展示（当前值 + 单位 °C），不用图表。
-- **心率**：用**波形/折线图**，重点做适配——波形波动形态一致，但**不同人的基线/量级不同**，展示时应按各自基线归一化/相对化（如显示相对波动或自动缩放 Y 轴），不能写死刻度。
-- **湿度**：折线图（趋势，非实时大数字）。
-- **皮电 → GSR（皮肤电反应）**：原始皮电信号做分析可得：
-  - SCL（皮电水平 / tonic，缓慢基线）—— 低通滤波获得；
-  - SCR（皮电反应 / phasic，事件性尖峰）—— 高频成分 + 峰值检测；
-  - 可据此给"紧张度/唤醒度"指标（EDA 领域常用）。
-  - 先做基础版（滤波 + 均值/峰值统计），后续改进（事件相关 SCR、峰谷检测）。
-- 端口策略：Python 端两个串口各自一个读取进程/线程，数据按时间戳落库；前端同一曲线区展示。
-- **每次新增的数据点都要落库**（不仅是实时推给前端）：前端曲线基于 DB 历史读取，刷新页面/回放时仍能拿到完整数据，不会因只流式展示而丢失。
+## 7. Arduino 生理信号数据（2026-08-08 已落地采集）
+- **两块板**（烧录代码在 `scripts/arduino/`）：端口 A = 温湿度+脉搏板（CSV `温度,脉搏,湿度`），端口 B = 皮电板（单值 GSR）；均 115200 波特、20Hz 采样。
+- **后端读取**：`engine/physio.py` 进程内后台线程（每端口一线程，懒启动）；每行解析 → 写 `PhysioSample`（原始，保留 1h 周期清理）→ 5s 窗口聚合写 `PhysioRecord`（含 `gsr_avg`）。端口断开自动重试。
+- **配置/接口**：`SerialConfig` 单例（enabled/port_a/port_b/baudrate，`/api/settings/serial` GET/PUT）；`/api/serial/ports` 列出可用串口；`/api/physio/latest`（最近样本+聚合+状态）、`/api/physio/history`。
+- **前端**：设置页「生理数据采集」节（开关 + 端口 A/B + 波特率，端口可用下拉 datalist）；PhysioChart 实时展示（体温/湿度/皮电大数字 + 脉搏波形 canvas + 端口连接状态点）。
+- **本地测试**：`scripts/physio_sim.py` 用 pty 建虚拟串口持续输出两板格式（填进设置即可测全链路）；`scripts/serial_measure.py` 读真实串口测 lines/s、bytes/s、间隔抖动（给板子端的人用）。
+- **待后续**：心率 BPM 峰值检测（当前存脉搏波形，非 BPM）；按人基线归一化波形；皮电 → SCL/SCR 紧张度指标；SQLite 上规模后迁 PostgreSQL。
 
 ## 7b. macOS 摄像头权限（TCC）
 - macOS 上摄像头受隐私保护：**需在 系统设置 → 隐私与安全性 → 摄像头 中给终端（运行 worker 的应用）授权**。
@@ -75,6 +70,10 @@
 - Vite 代理对 SSE/MJPEG 默认流式不缓冲；若预览卡顿，`<img>` 直连 Django 源（图片无需 CORS）。
 - 生产集成：Django 通过 `newcell/views.py::index_view` + 兜底正则（`^(?!admin/|api/|media/|static/).*$`）服务 `static/dist/index.html`，vue-router history 刷新/直链也返回入口。
 - 无头浏览器验证：`chrome --headless=new --remote-debugging-port` + python `websocket-client`（连接时 `suppress_origin=True`，否则 Chrome 151 拒绝 Origin）；`--dump-dom` 会在懒加载路由渲染前 dump，需 CDP 等待。
-- **CDP 取页面：`/json/list` 必须选 `type=="page"` 的那条，不能取 `[0]`**——列表可能混有 newtab/扩展页，取错会连到一个空白页，误判为"前端没挂载"（本次排查假警报的根因）。诊断时先 `Runtime/Log/Network/Page.enable` 再 `Page.navigate`，统一收集 console/network 失败/异常，避免黑盒猜。无头装 `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream` 提供假摄像头驱动"打开→拍照→提交"。
+- **CDP 取页面：`/json/list` 必须选 `type=="page"` 的那条，不能取 `[0]`**——列表可能混有 newtab/扩展页，取错会连到一个空白页，误判为"前端没挂载"（本次排查假警报的根因）。诊断时先 `Runtime/Log/Network/Page.enable` 再 `Page.navigate`，统一收集 console/network 失败/异常，避免黑盒猜。
+- **CDP 消息 id 必须为整数**：`{"id": <method名>}` 会被 Chrome 以 `Message must have integer 'id' property` 拒绝且**不回 id 匹配的响应**，`recv()` 循环将一直等 → 表现为 `Connection timed out`（排查了半小时的"连接超时"实为 id 类型错误）。
+- **Python `urllib`/`http.client` 无法访问 Chrome DevTools HTTP 服务**（`RemoteDisconnected: Remote end closed connection without response`），`curl http://127.0.0.1:9222/json/list` 正常——脚本里取 targets 一律用 `curl` 子进程。
+- **无头 E2E 假摄像头**：`--use-fake-device-for-media-stream --use-fake-ui-for-media-stream` 提供 640x480 测试画面；`useCaptureSession` 验证流程「面板渲染→点开始采集→`video.srcObject` 有 videoTrack→按钮翻转→MODEL ready→停止复位→无 console error」。假画面无真人脸 → 表情/身份预期 NO FACE（属正确行为）。
+- **MPS 在当前 conda env 不可用**：`torch.backends.mps.is_available()==False`（torch 2.13.0），全部推理走 CPU；warmup 完成后真实人脸帧推理 <1s。
 - `RegisteredFace.person_name` 唯一 → 重注册 upsert 覆盖 embedding。
 - 人脸注册首次调用会懒加载 insightface（~1min），之后即时。

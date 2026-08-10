@@ -40,7 +40,23 @@ class RegisteredFace(models.Model):
     person_name = models.CharField(max_length=128, unique=True)
     embedding = models.BinaryField()  # float32 normed_embedding(512).tobytes()
     thumbnail_path = models.CharField(max_length=512, blank=True, default="")
+    gender = models.CharField(max_length=16, blank=True, default="")
+    student_no = models.CharField(max_length=64, blank=True, default="")
+    major = models.CharField(max_length=128, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class LLMConfig(models.Model):
+    """AI 情感洞察的 LLM 配置（单例 id=1）。base_url/模型名代码写死。"""
+    provider = models.CharField(max_length=16, default="ollama")  # ollama | deepseek
+    ollama_model = models.CharField(max_length=128, default="qwen2.5:7b")
+    deepseek_api_key = models.CharField(max_length=256, blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(id=1)
+        return obj
