@@ -18,22 +18,36 @@ const loading = computed(() => running.value && modelState.value === 'loading')
 const resultItems = ref([]) // { timeLabel, text, model }，新分析结果在前
 const resultLoading = ref(false)
 const resultError = ref('')
+const lastSig = ref('') // 上次成功分析的输入签名，用于去重
 let timer = null
 
 async function fetchResult() {
   if (!running.value || modelState.value !== 'ready' || resultLoading.value) return
+  const transcript = transcriptItems.value.slice(0, 3).map((i) => i.text).join(' ').trim()
+  // 无表情且无语音时没有可分析内容，跳过
+  if (!dominant.value && !transcript) return
+  // 输入上下文未变化则跳过，避免重复喂模型产生雷同结果
+  const sig = [
+    dominant.value || 'none',
+    Math.round((conf.value ?? 0) * 100),
+    identity.value?.person_name || 'unknown',
+    transcript,
+  ].join('|')
+  if (sig === lastSig.value) return
   resultLoading.value = true
   resultError.value = ''
   try {
     const r = await api.post('/api/infer/result', {
-      emotion: dominant.value || 'none',
+      emotion: dominant.value,
       confidence: conf.value ?? 0,
       person_name: identity.value?.available ? identity.value.person_name : 'unknown',
-      transcript: transcriptItems.value.slice(0, 3).map((i) => i.text).join(' '),
+      transcript,
+      last_analysis: resultItems.value[0]?.text || '',
     })
     if (r.error) {
       resultError.value = r.error
     } else {
+      lastSig.value = sig
       const d = new Date()
       resultItems.value.unshift({
         timeLabel: d.toLocaleTimeString('zh-CN', { hour12: false }),

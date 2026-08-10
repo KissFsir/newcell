@@ -9,7 +9,9 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import RegisteredFace, LLMConfig
+from newcell.apps.physio.models import PhysioRecord
+
+from .models import RegisteredFace, LLMConfig, ExpressionRecord
 
 
 def _jpeg_bytes(color=(120, 120, 120)):
@@ -256,3 +258,42 @@ class InferResultTests(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertIn("error", resp.json())
+
+    @mock.patch("newcell.engine.llm.generate_insight", return_value="张三目前情绪平静。")
+    def test_result_context_enriched(self, mock_gen):
+        PhysioRecord.objects.create(temp_avg=36.5, hr_avg=42.0, gsr_avg=505.0)
+        ExpressionRecord.objects.create(dominant_emotion="neutral", neutral=0.9)
+        ExpressionRecord.objects.create(dominant_emotion="happy", happy=0.8)
+        resp = self.client.post(
+            reverse("expression:infer_result"),
+            data=json.dumps({"emotion": "happy", "person_name": "张三", "last_analysis": "上一句"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        system, user_prompt = mock_gen.call_args[0][1], mock_gen.call_args[0][2]
+        self.assertIn("专业情绪分析师", system)
+        self.assertIn("【生理信号】体温 36.5", user_prompt)
+        self.assertIn("【情绪趋势（近几次）】", user_prompt)
+        self.assertIn("【上一轮解读】上一句", user_prompt)
+
+
+class PromptTests(TestCase):
+    def test_build_user_prompt_structure(self):
+        from newcell.engine import prompts
+        p = prompts.build_user_prompt({
+            "person": "张三",
+            "gender": "男",
+            "major": "计算机科学",
+            "emotion": "neutral",
+            "confidence": 0.68,
+            "trend": ["neutral", "neutral", "happy"],
+            "physio": "体温 36.5°C，脉搏波形均值 42.0，皮电 505",
+            "transcript": "你好",
+            "last_analysis": "上一句",
+        })
+        self.assertIn("【身份】张三（男，计算机科学）", p)
+        self.assertIn("【面部表情】主情绪 neutral，置信度 68%", p)
+        self.assertIn("【情绪趋势（近几次）】neutral → neutral → happy", p)
+        self.assertIn("【生理信号】体温 36.5°C", p)
+        self.assertIn("【上一轮解读】上一句", p)
+        self.assertIn("请给出本轮专业解读。", p)
