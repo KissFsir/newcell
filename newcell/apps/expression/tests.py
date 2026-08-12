@@ -1,6 +1,7 @@
 import io
 import json
 import wave
+from datetime import timedelta
 from unittest import mock
 
 import cv2
@@ -8,10 +9,12 @@ import numpy as np
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone as dj_tz
 
 from newcell.apps.physio.models import PhysioRecord
+from newcell.apps.speech.models import TranscriptRecord
 
-from .models import RegisteredFace, LLMConfig, ExpressionRecord
+from .models import RegisteredFace, LLMConfig, ExpressionRecord, ReportConfig, ReportRecord
 
 
 def _jpeg_bytes(color=(120, 120, 120)):
@@ -297,3 +300,123 @@ class PromptTests(TestCase):
         self.assertIn("【生理信号】体温 36.5°C", p)
         self.assertIn("【上一轮解读】上一句", p)
         self.assertIn("请给出本轮专业解读。", p)
+
+    def test_build_report_prompt(self):
+        from newcell.engine import prompts
+        data = {
+            "person": "张三", "gender": "男", "major": "计算机科学",
+            "emotion_counts": "neutral 2次，happy 1次",
+            "trend": "neutral → happy",
+            "transcript": "你好",
+            "physio": "体温均值 36.5°C（36.2~36.8）",
+            "time_range": "2026-08-11 10:00:00 ~ 2026-08-11 10:05:00",
+        }
+        self.assertIn("监测对象】张三（男，计算机科学）", prompts.build_full_report_prompt(data))
+        self.assertIn("【监测时间】2026-08-11", prompts.build_full_report_prompt(data))
+        self.assertIn("请撰写上述监测会话的正式报告「综合结论与建议」章节。", prompts.build_conclusion_prompt(data))
+
+
+class ReportTests(TestCase):
+    def test_settings_report_get_put(self):
+        self.assertEqual(self.client.get(reverse("expression:settings_report")).json()["mode"], "structured")
+        resp = self.client.put(
+            reverse("expression:settings_report"),
+            data=json.dumps({"mode": "ai"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.json()["mode"], "ai")
+
+    @mock.patch("newcell.engine.llm.generate_insight", return_value="结论：状态平稳，建议适当休息。")
+    def test_generate_structured(self, *_):
+        start = dj_tz.now() - timedelta(seconds=120)
+        ExpressionRecord.objects.create(dominant_emotion="neutral", neutral=0.9)
+        ExpressionRecord.objects.create(dominant_emotion="happy", happy=0.8)
+        end = dj_tz.now() + timedelta(seconds=5)  # 覆盖刚创建的记录
+        resp = self.client.post(
+            reverse("expression:report_generate"),
+            data=json.dumps({"start": start.isoformat(), "end": end.isoformat(), "person_name": "张三"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["mode"], "structured")
+        self.assertEqual(body["content"]["conclusion"], "结论：状态平稳，建议适当休息。")
+        self.assertEqual(ReportRecord.objects.count(), 1)
+        self.assertEqual(ReportRecord.objects.first().content["emotion_counts"], {"neutral": 1, "happy": 1})
+
+    @mock.patch("newcell.engine.llm.generate_insight", return_value="完整报告：……")
+    def test_generate_ai(self, *_):
+        start = dj_tz.now() - timedelta(seconds=120)
+        end = dj_tz.now()
+        self.client.put(
+            reverse("expression:settings_report"),
+            data=json.dumps({"mode": "ai"}),
+            content_type="application/json",
+        )
+        resp = self.client.post(
+            reverse("expression:report_generate"),
+            data=json.dumps({"start": start.isoformat(), "end": end.isoformat(), "person_name": "张三"}),
+            content_type="application/json",
+        )
+        body = resp.json()
+        self.assertEqual(body["mode"], "ai")
+        self.assertIn("text", body["content"])
+
+    def test_generate_invalid_range(self):
+        resp = self.client.post(reverse("expression:report_generate"), data=json.dumps({}), content_type="application/json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_list_detail(self):
+        r = ReportRecord.objects.create(person_name="张三", mode="structured", content={"mode": "structured"})
+        resp = self.client.get(reverse("expression:report_list"))
+        self.assertEqual(len(resp.json()["reports"]), 1)
+        resp = self.client.get(reverse("expression:report_detail", args=[r.id]))
+        self.assertEqual(resp.json()["id"], r.id)
+
+    def test_list_filter_by_person(self):
+        ReportRecord.objects.create(person_name="张三", mode="structured", content={})
+        ReportRecord.objects.create(person_name="李四", mode="structured", content={})
+        resp = self.client.get(reverse("expression:report_list"), {"person": "张三"})
+        rows = resp.json()["reports"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["person_name"], "张三")
+        self.assertEqual(set(resp.json()["persons"]), {"张三", "李四"})
+
+    def test_list_filter_by_time(self):
+        r = ReportRecord.objects.create(person_name="张三", mode="structured", content={})
+        resp = self.client.get(reverse("expression:report_list"), {
+            "start": (dj_tz.now() - timedelta(days=1)).isoformat(),
+            "end": (dj_tz.now() + timedelta(days=1)).isoformat(),
+        })
+        self.assertIn(r.id, [x["id"] for x in resp.json()["reports"]])
+        resp = self.client.get(reverse("expression:report_list"), {
+            "start": (dj_tz.now() + timedelta(days=2)).isoformat(),
+        })
+        self.assertEqual(resp.json()["reports"], [])
+
+    def test_delete_report(self):
+        r = ReportRecord.objects.create(person_name="张三", mode="structured", content={})
+        resp = self.client.delete(reverse("expression:report_detail", args=[r.id]))
+        self.assertEqual(resp.json()["deleted"], True)
+        self.assertEqual(ReportRecord.objects.count(), 0)
+        resp = self.client.delete(reverse("expression:report_detail", args=[9999]))
+        self.assertEqual(resp.status_code, 404)
+
+
+class TranscriptStoreTests(TestCase):
+    def test_store(self):
+        resp = self.client.post(
+            reverse("expression:store_transcript"),
+            data=json.dumps({"text": "你好世界"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.json()["stored"], True)
+        self.assertEqual(TranscriptRecord.objects.first().text, "你好世界")
+
+    def test_store_empty(self):
+        resp = self.client.post(
+            reverse("expression:store_transcript"),
+            data=json.dumps({"text": "  "}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)

@@ -60,3 +60,27 @@ class LLMConfig(models.Model):
     def load(cls):
         obj, _ = cls.objects.get_or_create(id=1)
         return obj
+
+
+class ReportConfig(models.Model):
+    """报告生成配置（单例 id=1）：structured=结构化数据+AI 结论；ai=全 AI 生成。"""
+    mode = models.CharField(max_length=16, default="structured")  # structured | ai
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(id=1)
+        return obj
+
+
+class ReportRecord(models.Model):
+    """已生成的正式报告。content 为 JSON：structured={...章节} / ai={text}。"""
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    person_name = models.CharField(max_length=128, default="unknown")
+    mode = models.CharField(max_length=16, default="structured")
+    start_time = models.DateTimeField(null=True, blank=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+    content = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["-created_at"]

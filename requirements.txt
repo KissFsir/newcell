@@ -15,6 +15,7 @@ transformers==5.14.*
 huggingface_hub
 
 # 未来阶段（已装于 newcell，列此以便移植）
+reportlab
 openai-whisper
 speechbrain
 pyserial

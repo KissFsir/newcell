@@ -31,6 +31,8 @@ function useCaptureSessionRaw() {
   const voice = ref({ speaking: false, level: 0 })
   const interimText = ref('') // Web Speech API 实时中间结果
   const speechSupported = isWebSpeechSupported()
+  const sessionStart = ref(null) // 本次采集开始时间（用于报告时间窗）
+  const sessionEnd = ref(null)   // 本次采集结束时间
 
   let audioCtx = null
   let recorder = null
@@ -236,6 +238,8 @@ function useCaptureSessionRaw() {
               source: 'api',
             })
             if (transcriptItems.value.length > 30) transcriptItems.value.length = 30
+            // Web Speech 结果落库，报告按时间窗可查
+            api.post('/api/transcript/store', { text }).catch(() => {})
           }
         } else {
           interim += r[0].transcript
@@ -285,8 +289,15 @@ function useCaptureSessionRaw() {
       error.value = ''
       modelState.value = 'idle'
       voice.value.speaking = false
-      _setupAudio(ms)
+      sessionStart.value = new Date()
+      sessionEnd.value = null
+      // 先挂视频流：即使音频初始化失败，摄像头预览也要可用
       if (videoEl.value) videoEl.value.srcObject = ms
+      try {
+        _setupAudio(ms)
+      } catch (e) {
+        // 音频初始化失败不影响摄像头预览与推理
+      }
       if (mode.value === 'api') _startSpeechRecognition()
       _pollStatus()
     } catch (e) {
@@ -295,6 +306,7 @@ function useCaptureSessionRaw() {
   }
 
   function stop() {
+    if (running.value && sessionStart.value) sessionEnd.value = new Date()
     running.value = false
     clearTimeout(frameTimer)
     clearTimeout(audioTimer)
@@ -341,7 +353,7 @@ function useCaptureSessionRaw() {
   return {
     running, modelState, error, stream, videoEl, analyser,
     expression, identity, transcriptItems, voice, interimText,
-    mode, speechSupported,
+    mode, speechSupported, sessionStart, sessionEnd,
     start, stop, toggle, setVideoEl,
   }
 }

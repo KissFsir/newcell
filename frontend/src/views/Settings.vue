@@ -87,9 +87,38 @@ async function saveSerial() {
   }
 }
 
+// ---- 报告形式 ----
+const reportCfg = ref({ mode: 'structured' })
+const reportBusy = ref(false)
+const reportMsg = ref('')
+const reportMsgType = ref('')
+
+async function loadReport() {
+  try {
+    const d = await api.get('/api/settings/report')
+    reportCfg.value = { ...reportCfg.value, ...d }
+  } catch (e) { /* 后端不可用则保持默认 */ }
+}
+
+async function saveReport() {
+  reportBusy.value = true
+  reportMsg.value = ''
+  try {
+    reportCfg.value = await api.put('/api/settings/report', reportCfg.value)
+    reportMsg.value = '已保存'
+    reportMsgType.value = 'ok'
+  } catch (e) {
+    reportMsg.value = e.message || '保存失败'
+    reportMsgType.value = 'danger'
+  } finally {
+    reportBusy.value = false
+  }
+}
+
 onMounted(() => {
   loadLlm()
   loadSerial()
+  loadReport()
 })
 </script>
 
@@ -211,6 +240,36 @@ onMounted(() => {
           <span v-if="serialMsg" class="form-msg" :class="serialMsgType">{{ serialMsg }}</span>
         </div>
       </section>
+
+      <section class="settings-group">
+        <h3 class="settings-label">报告形式</h3>
+        <div class="segmented" role="radiogroup" aria-label="报告形式">
+          <button
+            v-for="m in [{ key: 'structured', label: '结构化 + AI 结论' }, { key: 'ai', label: '全 AI 生成' }]"
+            :key="m.key"
+            type="button"
+            class="seg-item mono"
+            :class="{ active: reportCfg.mode === m.key }"
+            :aria-pressed="reportCfg.mode === m.key"
+            @click="reportCfg.mode = m.key"
+          >
+            {{ m.label }}
+          </button>
+        </div>
+        <p class="settings-desc mono">
+          {{
+            reportCfg.mode === 'ai'
+              ? '整份报告由大模型撰写，文字更自然但数字略粗略。'
+              : '数据分章节精确呈现，AI 生成综合结论与建议。'
+          }}
+        </p>
+        <div class="form-actions">
+          <button class="btn primary" :disabled="reportBusy" @click="saveReport">
+            {{ reportBusy ? '保存中…' : '保存' }}
+          </button>
+          <span v-if="reportMsg" class="form-msg" :class="reportMsgType">{{ reportMsg }}</span>
+        </div>
+      </section>
     </div>
   </div>
 </template>
@@ -219,6 +278,8 @@ onMounted(() => {
 .settings-panel {
   max-width: 720px;
   margin: var(--gap) auto 0;
+  /* 内容可能超出 main（overflow:hidden），限制高度让内部滚动，保证所有节可见 */
+  max-height: calc(100% - var(--gap));
 }
 
 .settings-body {
